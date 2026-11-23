@@ -1,13 +1,12 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("./db");
 
-// Fresh column definitions for every table (never share one object between tables)
 const pk = () => ({ type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true });
 const fk = () => ({ type: DataTypes.INTEGER, allowNull: false });
 
 const PlayableCharacter = sequelize.define("playable_characters", {
   character_id: pk(),
-  character_name: { type: DataTypes.STRING(60), allowNull: false, unique: "uq_character_name" }, // UNIQUE
+  character_name: { type: DataTypes.STRING(60), allowNull: false, unique: "uq_character_name" },
   can_flip_dimensions: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 });
 
@@ -16,7 +15,7 @@ const CharacterAbility = sequelize.define("character_abilities", {
   character_id: fk(),
   ability_name: { type: DataTypes.STRING(60), allowNull: false },
   description: { type: DataTypes.TEXT },
-}, { indexes: [{ name: "ix_ability_name", fields: ["ability_name"] }] }); // INDEX
+}, { indexes: [{ name: "ix_ability_name", fields: ["ability_name"] }] });
 
 const LevelMilestone = sequelize.define("level_milestones", {
   level_number: { type: DataTypes.INTEGER, primaryKey: true },
@@ -68,7 +67,12 @@ const DimensionalDoor = sequelize.define("dimensional_doors", {
 const PureHeart = sequelize.define("pure_hearts", {
   heart_id: pk(),
   game_level_id: { type: DataTypes.INTEGER, allowNull: true },
-  heart_number: { type: DataTypes.INTEGER, allowNull: false, unique: "uq_heart_number" }, // UNIQUE
+  heart_number: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    unique: "uq_heart_number",
+    validate: { min: 1, max: 8 },
+  },
   heart_color: { type: DataTypes.STRING(20) },
 });
 
@@ -109,7 +113,7 @@ const Item = sequelize.define("items", {
   item_type_id: fk(),
   item_name: { type: DataTypes.STRING(60), allowNull: false },
   heal_amount: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-}, { indexes: [{ name: "ix_item_name", fields: ["item_name"] }] }); // INDEX
+}, { indexes: [{ name: "ix_item_name", fields: ["item_name"] }] });
 
 const CharacterInventory = sequelize.define("character_inventory", {
   inventory_id: pk(),
@@ -118,7 +122,6 @@ const CharacterInventory = sequelize.define("character_inventory", {
   quantity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
 });
 
-// Relationships (foreign keys) from the ERD
 const link = (parent, child, key, opts = {}) => {
   parent.hasMany(child, { foreignKey: key, ...opts });
   child.belongsTo(parent, { foreignKey: key, ...opts });
@@ -140,6 +143,23 @@ GameWorld.hasMany(DimensionalDoor, { foreignKey: "target_world_id", as: "incomin
 DimensionalDoor.belongsTo(GameWorld, { foreignKey: "source_world_id", as: "source" });
 DimensionalDoor.belongsTo(GameWorld, { foreignKey: "target_world_id", as: "target" });
 
-module.exports = { sequelize, PlayableCharacter, CharacterAbility, LevelMilestone,
-  CharacterProgression, Pixl, PixlAbility, GameWorld, GameLevel, DimensionalDoor,
-  PureHeart, Faction, Antagonist, Enemy, LevelEnemy, ItemType, Item, CharacterInventory };
+module.exports = {
+  sequelize,
+  PlayableCharacter,
+  CharacterAbility,
+  LevelMilestone,
+  CharacterProgression,
+  Pixl,
+  PixlAbility,
+  GameWorld,
+  GameLevel,
+  DimensionalDoor,
+  PureHeart,
+  Faction,
+  Antagonist,
+  Enemy,
+  LevelEnemy,
+  ItemType,
+  Item,
+  CharacterInventory,
+};

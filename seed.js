@@ -1,14 +1,57 @@
-// Fills every table with real Super Paper Mario data (3+ rows each).
-// Run: node seed.js   (safe to re-run: it rebuilds the tables first)
-const m = require("./models");
+﻿const m = require("./models");
 
-(async () => {
-  try {
-    await m.sequelize.sync({ force: true });
-    await m.sequelize.query(
-      "ALTER TABLE pure_hearts ADD CONSTRAINT ck_heart_number_1_8 CHECK (heart_number BETWEEN 1 AND 8)"
-    );
+async function createViewsAndProcedures() {
+  const dialect = m.sequelize.getDialect();
 
+  await m.sequelize.query("DROP VIEW IF EXISTS v_character_inventory");
+  await m.sequelize.query(`
+    CREATE VIEW v_character_inventory AS
+    SELECT pc.character_name, i.item_name, it.type_name, ci.quantity, i.heal_amount
+    FROM playable_characters pc
+    JOIN character_inventory ci ON ci.character_id = pc.character_id
+    JOIN items i               ON i.item_id       = ci.item_id
+    JOIN item_types it         ON it.item_type_id = i.item_type_id
+  `);
+
+  if (dialect === "mysql") {
+    try {
+      await m.sequelize.query("DROP PROCEDURE IF EXISTS sp_character_progression");
+      await m.sequelize.query(`
+        CREATE PROCEDURE sp_character_progression(IN p_name VARCHAR(60))
+        BEGIN
+          SELECT pc.character_name, cp.level_number, cp.current_xp, lm.stat_boost,
+                 GREATEST(nxt.required_xp - cp.current_xp, 0) AS xp_to_next_level
+          FROM playable_characters pc
+          JOIN character_progression cp ON cp.character_id = pc.character_id
+          JOIN level_milestones lm      ON lm.level_number = cp.level_number
+          LEFT JOIN level_milestones nxt ON nxt.level_number = cp.level_number + 1
+          WHERE pc.character_name = p_name;
+        END
+      `);
+    } catch (_err) {}
+  }
+}
+
+async function seedDatabase(force = false) {
+  await m.sequelize.authenticate();
+  if (m.sequelize.getDialect() === "sqlite") {
+    await m.sequelize.query("PRAGMA journal_mode = WAL;");
+    await m.sequelize.query("PRAGMA foreign_keys = ON;");
+  }
+
+  await m.sequelize.sync({ force });
+
+  if (m.sequelize.getDialect() === "mysql") {
+    try {
+      await m.sequelize.query(
+        "ALTER TABLE pure_hearts ADD CONSTRAINT ck_heart_number_1_8 CHECK (heart_number BETWEEN 1 AND 8)"
+      );
+    } catch (_err) {}
+  }
+
+  await createViewsAndProcedures();
+
+  if ((await m.PlayableCharacter.count()) === 0) {
     await m.PlayableCharacter.bulkCreate([
       { character_id: 1, character_name: "Mario", can_flip_dimensions: true },
       { character_id: 2, character_name: "Princess Peach", can_flip_dimensions: false },
@@ -74,7 +117,7 @@ const m = require("./models");
       { source_world_id: 1, target_world_id: 2, lock_status: "Unlocked later in the game" },
     ]);
     await m.PureHeart.bulkCreate([
-      { heart_number: 1, heart_color: "Red", game_level_id: null }, // given by Merlon in Flipside
+      { heart_number: 1, heart_color: "Red", game_level_id: null },
       { heart_number: 2, heart_color: "Orange", game_level_id: 3 },
       { heart_number: 3, heart_color: "Yellow", game_level_id: 5 },
       { heart_number: 4, heart_color: "Green", game_level_id: 6 },
@@ -129,11 +172,20 @@ const m = require("./models");
       { character_id: 3, item_id: 4, quantity: 1 },
       { character_id: 4, item_id: 5, quantity: 2 },
     ]);
-
-    console.log("Database populated! Every table has 3+ rows.");
-  } catch (err) {
-    console.error(err);
-  } finally {
-    await m.sequelize.close();
   }
-})();
+}
+
+if (require.main === module) {
+  (async () => {
+    try {
+      await seedDatabase(true);
+      console.log("Database populated! Every table has 3+ rows.");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      await m.sequelize.close();
+    }
+  })();
+}
+
+module.exports = { seedDatabase };

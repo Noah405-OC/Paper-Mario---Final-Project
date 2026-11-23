@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sequelize RDBMS + Gemini Explorer</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #0f172a; color: #e2e8f0; display: grid; grid-template-columns: 1.4fr 1fr; height: 100vh; }
+    section { padding: 20px; overflow-y: auto; border-right: 1px solid #1e293b; }
+    h2 { margin-top: 0; font-size: 1.1rem; color: #38bdf8; }
+    select, input, button { padding: 8px 10px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #f8fafc; }
+    button { background: #2563eb; border: none; cursor: pointer; font-weight: 600; }
+    button:hover { background: #1d4ed8; }
+    button.secondary { background: #334155; }
+    button.secondary:hover { background: #475569; }
+    button.danger { background: #dc2626; padding: 4px 8px; font-size: 0.8rem; }
+    button.edit { background: #0d9488; padding: 4px 8px; font-size: 0.8rem; margin-right: 4px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 0.9rem; }
+    th, td { border: 1px solid #334155; padding: 8px; text-align: left; }
+    th { background: #1e293b; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .key-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .key-bar input { flex: 1; min-width: 180px; }
+    .chat-box { display: flex; flex-direction: column; height: calc(100vh - 40px); }
+    .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+    .msg { padding: 12px; border-radius: 8px; background: #1e293b; line-height: 1.45; }
+    .msg.user { background: #1d4ed8; align-self: flex-end; max-width: 85%; }
+    .sql-tag { margin-top: 8px; font-family: monospace; font-size: 0.8rem; background: #020617; padding: 6px 8px; border-radius: 4px; color: #4ade80; }
+    .ask-bar { display: flex; gap: 8px; margin-top: 12px; }
+    .ask-bar input { flex: 1; }
+    pre.report-box { background: #020617; border: 1px solid #334155; padding: 12px; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-top: 14px; color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <section>
+    <h2>CRUD</h2>
+    <div class="toolbar">
+      <label>Active Table:
+        <select id="tableSelect" onchange="loadTable()"></select>
+      </label>
+      <button type="button" class="secondary" onclick="loadView()">View: Character Inventory</button>
+      <button type="button" class="secondary" onclick="loadProcedure()">Procedure: Progression</button>
+      <button type="button" class="secondary" onclick="loadCharacterReport()">5-Table Join Report</button>
+    </div>
+
+    <form id="createForm" class="form-row" onsubmit="createRow(event)"></form>
+
+    <div id="tableWrapper">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section style="border-right: none;">
+    <div class="chat-box">
+      <h2>2. Gemini (Read-Only)</h2>
+      <div class="key-bar">
+        <input id="apiKeyInput" type="password" placeholder="Paste your Gemini API Key..." autocomplete="off" oninput="saveKey()" />
+        <select id="modelSelect" title="Gemini Model">
+          <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
+          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+          <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+        </select>
+        <button type="button" class="secondary" id="toggleKeyBtn" onclick="toggleKeyVisibility()">Show</button>
+        <button type="button" class="secondary" onclick="clearKey()">Clear</button>
+      </div>
+      <div id="messages" class="messages">
+        <div class="msg">Enter your Gemini API key above, then ask anything about your database.</div>
+      </div>
+      <form class="ask-bar" onsubmit="askGemini(event)">
+        <input id="questionInput" placeholder="Ask a question about your data..." required />
+        <button type="submit">Ask</button>
+      </form>
+    </div>
+  </section>
+
+  <script>
+    let schema = {};
+    let currentRows = [];
+
+    function getPkCol(table) {
+      const tableMeta = schema[table] || {};
+      const entry = Object.entries(tableMeta).find(([, meta]) => meta.primaryKey);
+      return entry ? entry[0] : "id";
+    }
+
+    function saveKey() {
+      sessionStorage.setItem("gemini_api_key", document.getElementById("apiKeyInput").value);
+    }
+
+    function clearKey() {
+      document.getElementById("apiKeyInput").value = "";
+      sessionStorage.removeItem("gemini_api_key");
+    }
+
+    function toggleKeyVisibility() {
+      const input = document.getElementById("apiKeyInput");
+      const btn = document.getElementById("toggleKeyBtn");
+      const hidden = input.type === "password";
+      input.type = hidden ? "text" : "password";
+      btn.textContent = hidden ? "Hide" : "Show";
+    }
+
+    function renderReadOnlyTable(rows) {
+      document.getElementById("createForm").innerHTML = "";
+      if (!rows || rows.length === 0) {
+        document.getElementById("tableWrapper").innerHTML = `<p>No records returned.</p>`;
+        return;
+      }
+      const cols = Object.keys(rows[0]);
+      document.getElementById("tableWrapper").innerHTML = `
+        <table>
+          <thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>${cols.map(c => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function loadView() {
+      const rows = await (await fetch("/api/views/character-inventory")).json();
+      renderReadOnlyTable(rows);
+    }
+
+    async function loadProcedure() {
+      const name = prompt("Enter playable character name (e.g. Mario, Princess Peach, Bowser, Luigi):", "Mario");
+      if (!name) return;
+      const rows = await (await fetch(`/api/procedures/progression/${encodeURIComponent(name)}`)).json();
+      renderReadOnlyTable(rows);
+    }
+
+    async function loadCharacterReport() {
+      const data = await (await fetch("/api/reports/characters")).json();
+      document.getElementById("createForm").innerHTML = "";
+      document.getElementById("tableWrapper").innerHTML = `<pre class="report-box">${JSON.stringify(data, null, 2)}</pre>`;
+    }
+
+    async function init() {
+      const saved = sessionStorage.getItem("gemini_api_key");
+      if (saved) document.getElementById("apiKeyInput").value = saved;
+
+      schema = await (await fetch("/api/schema")).json();
+      const select = document.getElementById("tableSelect");
+      select.innerHTML = Object.keys(schema).map(t => `<option value="${t}">${t}</option>`).join("");
+      if (select.value) loadTable();
+    }
+
+    async function loadTable() {
+      document.getElementById("tableWrapper").innerHTML = `
+        <table>
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      `;
+
+      const table = document.getElementById("tableSelect").value;
+      const pkCol = getPkCol(table);
+      const cols = Object.keys(schema[table]);
+      const inputCols = cols.filter(c => !(c === pkCol && schema[table][c].autoIncrement));
+
+      document.getElementById("createForm").innerHTML =
+        inputCols.map(c => {
+          const meta = schema[table][c];
+          const isReq = !meta.allowNull && meta.defaultValue === null && !meta.autoIncrement;
+          const isBool = String(meta.type || "").toUpperCase().includes("BOOL") || String(meta.type || "").toUpperCase().includes("TINYINT(1)");
+          const hint = isBool ? `${c} (true/false)` : isReq ? `${c} *` : c;
+          return `<input name="${c}" placeholder="${hint}" ${isReq ? "required" : ""} />`;
+        }).join("") +
+        `<button type="submit">+ Insert Row</button>`;
+
+      currentRows = await (await fetch(`/api/tables/${table}`)).json();
+      document.getElementById("tableHead").innerHTML =
+        `<tr>${cols.map(c => `<th>${c}</th>`).join("")}<th>Actions</th></tr>`;
+
+      document.getElementById("tableBody").innerHTML = currentRows.map((row, idx) => `
+        <tr>
+          ${cols.map(c => `<td>${row[c] ?? ""}</td>`).join("")}
+          <td>
+            <button class="edit" onclick="editRow(${idx})">Edit</button>
+            <button class="danger" onclick="deleteRow(${idx})">Delete</button>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    async function createRow(e) {
+      e.preventDefault();
+      const table = document.getElementById("tableSelect").value;
+      const body = Object.fromEntries(new FormData(e.target).entries());
+      const hasValue = Object.values(body).some(v => String(v).trim() !== "");
+      if (!hasValue) {
+        alert("Please fill in at least one field before inserting a row.");
+        return;
+      }
+      const res = await fetch(`/api/tables/${table}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Insert failed");
+        return;
+      }
+      e.target.reset();
+      loadTable();
+    }
+
+    async function editRow(idx) {
+      const table = document.getElementById("tableSelect").value;
+      const pkCol = getPkCol(table);
+      const row = currentRows[idx];
+      const updated = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (k === pkCol) continue;
+        const next = prompt(`New value for ${k}:`, v ?? "");
+        if (next === null) return;
+        updated[k] = next;
+      }
+      const res = await fetch(`/api/tables/${table}/${encodeURIComponent(row[pkCol])}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Update failed");
+        return;
+      }
+      loadTable();
+    }
+
+    async function deleteRow(idx) {
+      const table = document.getElementById("tableSelect").value;
+      const pkCol = getPkCol(table);
+      const row = currentRows[idx];
+      const res = await fetch(`/api/tables/${table}/${encodeURIComponent(row[pkCol])}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Delete failed");
+        return;
+      }
+      loadTable();
+    }
+
+    async function askGemini(e) {
+      e.preventDefault();
+      const apiKey = document.getElementById("apiKeyInput").value.trim();
+      const model = document.getElementById("modelSelect").value;
+      const input = document.getElementById("questionInput");
+      const question = input.value.trim();
+      if (!question) return;
+
+      const msgs = document.getElementById("messages");
+      if (!apiKey) {
+        msgs.innerHTML += `<div class="msg"><span style="color:#f87171">Please enter your Gemini API key in the field above first.</span></div>`;
+        msgs.scrollTop = msgs.scrollHeight;
+        return;
+      }
+
+      input.value = "";
+      msgs.innerHTML += `<div class="msg user">${question}</div>`;
+      const pending = document.createElement("div");
+      pending.className = "msg";
+      pending.textContent = "Querying...";
+      msgs.appendChild(pending);
+      msgs.scrollTop = msgs.scrollHeight;
+
+      const res = await (await fetch("/api/ask", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-gemini-api-key": apiKey,
+        },
+        body: JSON.stringify({ question, model }),
+      })).json();
+
+      const meta = [];
+      if (res.usedModel) meta.push(`Model: ${res.usedModel}`);
+      if (res.queriesRun?.length) meta.push(`SQL: ${res.queriesRun.join(" | ")}`);
+
+      pending.innerHTML = res.error
+        ? `<span style="color:#f87171">Error: ${res.error}</span>`
+        : `${res.answer}` + (meta.length ? `<div class="sql-tag">${meta.join(" • ")}</div>` : "");
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+
+    init();
+  </script>
+</body>
+</html>
