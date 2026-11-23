@@ -1,0 +1,26 @@
+{
+  "name": "paper-mario---final-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Noah405-OC/Paper-Mario---Final-Project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Noah405-OC/Paper-Mario---Final-Project/issues"
+  },
+  "homepage": "https://github.com/Noah405-OC/Paper-Mario---Final-Project#readme",
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "mysql2": "^3.24.6",
+    "sequelize": "^6.37.8"
+  }
+}
