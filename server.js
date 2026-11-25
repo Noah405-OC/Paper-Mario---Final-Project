@@ -158,21 +158,38 @@ app.get("/api/views/character-inventory", async (_req, res) => {
 
 app.get("/api/procedures/progression/:name", async (req, res) => {
   try {
+    const name = String(req.params.name || "").trim();
+    if (!name) {
+      return res.status(400).json({ error: "Character name is required." });
+    }
+
     if (m.sequelize.getDialect() === "mysql") {
       const rows = await m.sequelize.query("CALL sp_character_progression(:name)", {
-        replacements: { name: req.params.name },
+        replacements: { name },
       });
-      return res.json(rows);
+      const resultSet = Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0] : rows;
+      return res.json(resultSet);
     }
+
     const rows = await m.sequelize.query(
-      `SELECT pc.character_name, cp.level_number, cp.current_xp, lm.stat_boost,
-              GREATEST(COALESCE(nxt.required_xp - cp.current_xp, 0), 0) AS xp_to_next_level
+      `SELECT pc.character_name,
+              cp.level_number,
+              cp.current_xp,
+              lm.stat_boost,
+              CASE
+                WHEN nxt.required_xp IS NULL THEN 0
+                WHEN nxt.required_xp - cp.current_xp < 0 THEN 0
+                ELSE nxt.required_xp - cp.current_xp
+              END AS xp_to_next_level
        FROM playable_characters pc
        JOIN character_progression cp ON cp.character_id = pc.character_id
        JOIN level_milestones lm      ON lm.level_number = cp.level_number
        LEFT JOIN level_milestones nxt ON nxt.level_number = cp.level_number + 1
-       WHERE pc.character_name = :name`,
-      { replacements: { name: req.params.name }, type: QueryTypes.SELECT }
+       WHERE LOWER(pc.character_name) = LOWER(:name)`,
+      {
+        replacements: { name },
+        type: QueryTypes.SELECT,
+      }
     );
     res.json(rows);
   } catch (err) {

@@ -126,12 +126,26 @@
       renderReadOnlyTable(rows);
     }
 
-    async function loadProcedure() {
-      const name = prompt("Enter playable character name (e.g. Mario, Princess Peach, Bowser, Luigi):", "Mario");
-      if (!name) return;
-      const rows = await (await fetch(`/api/procedures/progression/${encodeURIComponent(name)}`)).json();
-      renderReadOnlyTable(rows);
-    }
+  async function loadProcedure() {
+  const name = window.prompt(
+    "Enter playable character name (Mario, Princess Peach, Bowser, Luigi):",
+    "Mario"
+  );
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) {
+    alert("Please enter a character name.");
+    return;
+  }
+
+  const res = await fetch(`/api/procedures/progression/${encodeURIComponent(trimmed)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || "Failed to load progression.");
+    return;
+  }
+  renderReadOnlyTable(data);
+}
 
     async function loadCharacterReport() {
       const data = await (await fetch("/api/reports/characters")).json();
