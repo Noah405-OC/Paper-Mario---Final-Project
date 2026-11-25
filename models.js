@@ -126,6 +126,7 @@ const link = (parent, child, key, opts = {}) => {
   parent.hasMany(child, { foreignKey: key, ...opts });
   child.belongsTo(parent, { foreignKey: key, ...opts });
 };
+
 link(PlayableCharacter, CharacterAbility, "character_id", { onDelete: "CASCADE" });
 link(PlayableCharacter, CharacterProgression, "character_id", { onDelete: "CASCADE" });
 link(PlayableCharacter, CharacterInventory, "character_id", { onDelete: "CASCADE" });
@@ -138,6 +139,7 @@ link(Enemy, LevelEnemy, "enemy_id");
 link(Faction, Antagonist, "faction_id");
 link(ItemType, Item, "item_type_id");
 link(Item, CharacterInventory, "item_id");
+
 GameWorld.hasMany(DimensionalDoor, { foreignKey: "source_world_id", as: "outgoingDoors" });
 GameWorld.hasMany(DimensionalDoor, { foreignKey: "target_world_id", as: "incomingDoors" });
 DimensionalDoor.belongsTo(GameWorld, { foreignKey: "source_world_id", as: "source" });

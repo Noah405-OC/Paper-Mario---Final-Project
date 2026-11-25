@@ -1,6 +1,6 @@
 ﻿const m = require("./models");
 
-async function createViewsAndProcedures() {
+async function setupViewsAndProcedures() {
   const dialect = m.sequelize.getDialect();
 
   await m.sequelize.query("DROP VIEW IF EXISTS v_character_inventory");
@@ -49,7 +49,7 @@ async function seedDatabase(force = false) {
     } catch (_err) {}
   }
 
-  await createViewsAndProcedures();
+  await setupViewsAndProcedures();
 
   if ((await m.PlayableCharacter.count()) === 0) {
     await m.PlayableCharacter.bulkCreate([

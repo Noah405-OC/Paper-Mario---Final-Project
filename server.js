@@ -9,12 +9,12 @@ const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-let initPromise = null;
+let readyPromise = null;
 function ensureDbReady() {
-  if (!initPromise) {
-    initPromise = seedDatabase(false);
+  if (!readyPromise) {
+    readyPromise = seedDatabase(false);
   }
-  return initPromise;
+  return readyPromise;
 }
 
 app.use(async (_req, _res, next) => {
@@ -26,27 +26,27 @@ app.use(async (_req, _res, next) => {
   }
 });
 
-function getPrimaryKeyColumn(tableSchema) {
-  const pkEntry = Object.entries(tableSchema).find(([, meta]) => meta.primaryKey);
-  return pkEntry ? pkEntry[0] : "id";
+function getPkCol(tableSchema) {
+  const entry = Object.entries(tableSchema).find(([, meta]) => meta.primaryKey);
+  return entry ? entry[0] : "id";
 }
 
-function coerceValue(val, colMeta) {
+function coerceVal(val, colMeta) {
   if (val === "" || val === undefined || val === null) return null;
-  const colType = String(colMeta?.type || "").toUpperCase();
-  if (colType.includes("BOOL") || colType.includes("TINYINT(1)")) {
+  const t = String(colMeta?.type || "").toUpperCase();
+  if (t.includes("BOOL") || t.includes("TINYINT(1)")) {
     if (val === true || val === "true" || val === "1" || val === 1) return true;
     if (val === false || val === "false" || val === "0" || val === 0) return false;
   }
   return val;
 }
 
-async function validateTableAndColumns(table, payloadKeys = []) {
+async function checkTableAndCols(table, keys = []) {
   const schema = await m.sequelize.getDatabaseSchema();
   if (!schema[table]) throw new Error(`Unknown table: ${table}`);
-  const validCols = Object.keys(schema[table]);
-  for (const key of payloadKeys) {
-    if (!validCols.includes(key)) throw new Error(`Invalid column: ${key}`);
+  const cols = Object.keys(schema[table]);
+  for (const k of keys) {
+    if (!cols.includes(k)) throw new Error(`Invalid column: ${k}`);
   }
   return schema[table];
 }
@@ -62,7 +62,7 @@ app.get("/api/schema", async (_req, res) => {
 app.get("/api/tables/:table", async (req, res) => {
   try {
     const { table } = req.params;
-    await validateTableAndColumns(table);
+    await checkTableAndCols(table);
     const rows = await m.sequelize.query(`SELECT * FROM "${table}"`, {
       type: QueryTypes.SELECT,
     });
@@ -77,22 +77,15 @@ app.post("/api/tables/:table", async (req, res) => {
     const { table } = req.params;
     const rawEntries = Object.entries(req.body).filter(([, v]) => v !== "" && v !== undefined);
     if (rawEntries.length === 0) {
-      return res.status(400).json({ error: "Please fill in at least one field before inserting a row." });
+      return res.status(400).json({ error: "Please fill in at least one field." });
     }
-
-    const tableSchema = await validateTableAndColumns(
-      table,
-      rawEntries.map(([k]) => k)
-    );
-
-    const entries = rawEntries.map(([k, v]) => [k, coerceValue(v, tableSchema[k])]);
+    const tableSchema = await checkTableAndCols(table, rawEntries.map(([k]) => k));
+    const entries = rawEntries.map(([k, v]) => [k, coerceVal(v, tableSchema[k])]);
     const cols = entries.map(([k]) => `"${k}"`).join(", ");
-    const placeholders = entries.map(([k]) => `:${k}`).join(", ");
-    const replacements = Object.fromEntries(entries);
-
+    const params = entries.map(([k]) => `:${k}`).join(", ");
     await m.sequelize.query(
-      `INSERT INTO "${table}" (${cols}) VALUES (${placeholders})`,
-      { replacements, type: QueryTypes.INSERT }
+      `INSERT INTO "${table}" (${cols}) VALUES (${params})`,
+      { replacements: Object.fromEntries(entries), type: QueryTypes.INSERT }
     );
     res.status(201).json({ status: "created" });
   } catch (err) {
@@ -103,22 +96,18 @@ app.post("/api/tables/:table", async (req, res) => {
 app.put("/api/tables/:table/:id", async (req, res) => {
   try {
     const { table, id } = req.params;
-    const tableSchema = await validateTableAndColumns(table);
-    const pkCol = getPrimaryKeyColumn(tableSchema);
+    const tableSchema = await checkTableAndCols(table);
+    const pkCol = getPkCol(tableSchema);
     const rawEntries = Object.entries(req.body).filter(([k]) => k !== pkCol);
     if (rawEntries.length === 0) {
       return res.status(400).json({ error: "No fields provided to update." });
     }
-
-    await validateTableAndColumns(table, rawEntries.map(([k]) => k));
-
-    const entries = rawEntries.map(([k, v]) => [k, coerceValue(v, tableSchema[k])]);
-    const setClause = entries.map(([k]) => `"${k}" = :${k}`).join(", ");
-    const replacements = { ...Object.fromEntries(entries), _id: id };
-
+    await checkTableAndCols(table, rawEntries.map(([k]) => k));
+    const entries = rawEntries.map(([k, v]) => [k, coerceVal(v, tableSchema[k])]);
+    const setSql = entries.map(([k]) => `"${k}" = :${k}`).join(", ");
     await m.sequelize.query(
-      `UPDATE "${table}" SET ${setClause} WHERE "${pkCol}" = :_id`,
-      { replacements, type: QueryTypes.UPDATE }
+      `UPDATE "${table}" SET ${setSql} WHERE "${pkCol}" = :_id`,
+      { replacements: { ...Object.fromEntries(entries), _id: id }, type: QueryTypes.UPDATE }
     );
     res.json({ status: "updated" });
   } catch (err) {
@@ -129,8 +118,8 @@ app.put("/api/tables/:table/:id", async (req, res) => {
 app.delete("/api/tables/:table/:id", async (req, res) => {
   try {
     const { table, id } = req.params;
-    const tableSchema = await validateTableAndColumns(table);
-    const pkCol = getPrimaryKeyColumn(tableSchema);
+    const tableSchema = await checkTableAndCols(table);
+    const pkCol = getPkCol(tableSchema);
     await m.sequelize.query(`DELETE FROM "${table}" WHERE "${pkCol}" = :id`, {
       replacements: { id },
       type: QueryTypes.DELETE,
@@ -175,7 +164,6 @@ app.get("/api/procedures/progression/:name", async (req, res) => {
       });
       return res.json(rows);
     }
-
     const rows = await m.sequelize.query(
       `SELECT pc.character_name, cp.level_number, cp.current_xp, lm.stat_boost,
               GREATEST(COALESCE(nxt.required_xp - cp.current_xp, 0), 0) AS xp_to_next_level
@@ -184,10 +172,7 @@ app.get("/api/procedures/progression/:name", async (req, res) => {
        JOIN level_milestones lm      ON lm.level_number = cp.level_number
        LEFT JOIN level_milestones nxt ON nxt.level_number = cp.level_number + 1
        WHERE pc.character_name = :name`,
-      {
-        replacements: { name: req.params.name },
-        type: QueryTypes.SELECT,
-      }
+      { replacements: { name: req.params.name }, type: QueryTypes.SELECT }
     );
     res.json(rows);
   } catch (err) {
@@ -195,7 +180,7 @@ app.get("/api/procedures/progression/:name", async (req, res) => {
   }
 });
 
-const directTables = {
+const modelMap = {
   playable_characters: m.PlayableCharacter,
   character_abilities: m.CharacterAbility,
   level_milestones: m.LevelMilestone,
@@ -215,20 +200,20 @@ const directTables = {
   character_inventory: m.CharacterInventory,
 };
 
-for (const [name, Model] of Object.entries(directTables)) {
-  app.get(`/api/${name}`, async (_req, res) => res.json(await Model.findAll()));
-  app.get(`/api/${name}/:id`, async (req, res) => {
+for (const [tableName, Model] of Object.entries(modelMap)) {
+  app.get(`/api/${tableName}`, async (_req, res) => res.json(await Model.findAll()));
+  app.get(`/api/${tableName}/:id`, async (req, res) => {
     const row = await Model.findByPk(req.params.id);
     row ? res.json(row) : res.status(404).json({ error: "Not found" });
   });
-  app.post(`/api/${name}`, async (req, res) => {
+  app.post(`/api/${tableName}`, async (req, res) => {
     try {
       res.status(201).json(await Model.create(req.body));
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
   });
-  app.put(`/api/${name}/:id`, async (req, res) => {
+  app.put(`/api/${tableName}/:id`, async (req, res) => {
     try {
       const row = await Model.findByPk(req.params.id);
       if (!row) return res.status(404).json({ error: "Not found" });
@@ -237,7 +222,7 @@ for (const [name, Model] of Object.entries(directTables)) {
       res.status(400).json({ error: e.message });
     }
   });
-  app.delete(`/api/${name}/:id`, async (req, res) => {
+  app.delete(`/api/${tableName}/:id`, async (req, res) => {
     const count = await Model.destroy({ where: { [Model.primaryKeyAttribute]: req.params.id } });
     count ? res.json({ deleted: true }) : res.status(404).json({ error: "Not found" });
   });
@@ -272,7 +257,7 @@ const FALLBACK_MODELS = [
   "gemini-3.8-flash",
 ];
 
-function isTransientOverload(err) {
+function isRetryableError(err) {
   const msg = String(err?.message || "");
   return (
     err?.status === 503 ||
@@ -283,32 +268,26 @@ function isTransientOverload(err) {
   );
 }
 
-async function generateWithFallback(ai, preferredModel, contents, config) {
+async function callModelWithFallback(ai, preferredModel, contents, config) {
   const models = [
     preferredModel,
-    ...FALLBACK_MODELS.filter((mName) => mName !== preferredModel),
+    ...FALLBACK_MODELS.filter((item) => item !== preferredModel),
   ];
 
-  let lastError;
+  let lastErr;
   for (const model of models) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents,
-          config,
-        });
+        const response = await ai.models.generateContent({ model, contents, config });
         return { response, usedModel: model };
       } catch (err) {
-        lastError = err;
-        if (!isTransientOverload(err)) {
-          throw err;
-        }
+        lastErr = err;
+        if (!isRetryableError(err)) throw err;
         await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
       }
     }
   }
-  throw lastError;
+  throw lastErr;
 }
 
 app.post("/api/ask", async (req, res) => {
@@ -327,21 +306,15 @@ app.post("/api/ask", async (req, res) => {
   const config = {
     systemInstruction:
       "You are a data analyst connected to a Super Paper Mario relational database via Sequelize. " +
-      "Call get_schema first to inspect all 17 tables, primary keys, foreign keys, and columns, then execute read-only " +
+      "Call get_schema first to inspect all 17 tables, primary keys, foreign keys, and columns, then run read-only " +
       "SELECT queries with run_readonly_sql to answer the user accurately. " +
-      "You may also query the v_character_inventory view. " +
-      "If a query returns a SQL error, fix the syntax and retry.",
+      "You can also query v_character_inventory.",
     tools: geminiTools,
   };
 
   try {
     for (let step = 0; step < 6; step++) {
-      const { response, usedModel } = await generateWithFallback(
-        ai,
-        activeModel,
-        contents,
-        config
-      );
+      const { response, usedModel } = await callModelWithFallback(ai, activeModel, contents, config);
       activeModel = usedModel;
 
       const candidate = response.candidates?.[0];
@@ -370,10 +343,7 @@ app.post("/api/ask", async (req, res) => {
         }
 
         toolResponses.push({
-          functionResponse: {
-            name,
-            response: { result: output },
-          },
+          functionResponse: { name, response: { result: output } },
         });
       }
 

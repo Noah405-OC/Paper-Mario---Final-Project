@@ -4,45 +4,38 @@ const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
 const { Sequelize, QueryTypes } = require("sequelize");
 
-function sanitizeValue(v) {
-  if (v === undefined) return null;
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (v instanceof Date) return v.toISOString();
-  return v;
+function cleanParam(val) {
+  if (val === undefined) return null;
+  if (typeof val === "boolean") return val ? 1 : 0;
+  if (val instanceof Date) return val.toISOString();
+  return val;
 }
 
-function executePrepared(stmt, method, params) {
-  if (!params) {
-    return stmt[method]();
-  }
-  if (Array.isArray(params)) {
-    return stmt[method](...params.map(sanitizeValue));
-  }
+function runStmt(stmt, method, params) {
+  if (!params) return stmt[method]();
+  if (Array.isArray(params)) return stmt[method](...params.map(cleanParam));
   if (typeof params === "object") {
     const entries = Object.entries(params);
-    if (entries.length === 0) {
-      return stmt[method]();
-    }
+    if (entries.length === 0) return stmt[method]();
     if (typeof stmt.setAllowUnknownNamedParameters === "function") {
       stmt.setAllowUnknownNamedParameters(true);
     }
-    const clean = {};
+    const mapped = {};
     for (const [k, v] of entries) {
-      clean[k] = sanitizeValue(v);
+      mapped[k] = cleanParam(v);
     }
-    return stmt[method](clean);
+    return stmt[method](mapped);
   }
-  return stmt[method](sanitizeValue(params));
+  return stmt[method](cleanParam(params));
 }
 
-class NodeSqliteDatabase {
-  constructor(filename, mode, callback) {
+class SqliteDriver {
+  constructor(filename, mode, cb) {
     try {
-      const readOnly = mode === 1;
-      this.db = new DatabaseSync(filename, { readOnly });
-      if (callback) queueMicrotask(() => callback(null));
+      this.db = new DatabaseSync(filename, { readOnly: mode === 1 });
+      if (cb) queueMicrotask(() => cb(null));
     } catch (err) {
-      if (callback) queueMicrotask(() => callback(err));
+      if (cb) queueMicrotask(() => cb(err));
     }
   }
 
@@ -52,92 +45,91 @@ class NodeSqliteDatabase {
     if (fn) fn();
   }
 
-  exec(sql, callback) {
+  exec(sql, cb) {
     try {
       this.db.exec(sql);
-      if (callback) callback.call({ lastID: 0, changes: 0 }, null);
+      if (cb) cb.call({ lastID: 0, changes: 0 }, null);
     } catch (err) {
-      if (callback) callback(err);
+      if (cb) cb(err);
     }
   }
 
-  run(sql, params, callback) {
+  run(sql, params, cb) {
     if (typeof params === "function") {
-      callback = params;
+      cb = params;
       params = null;
     }
     try {
       const stmt = this.db.prepare(sql);
-      const res = executePrepared(stmt, "run", params);
+      const info = runStmt(stmt, "run", params);
       const ctx = {
-        lastID: Number(res.lastInsertRowid || 0),
-        changes: Number(res.changes || 0),
+        lastID: Number(info.lastInsertRowid || 0),
+        changes: Number(info.changes || 0),
       };
-      if (callback) callback.call(ctx, null);
+      if (cb) cb.call(ctx, null);
     } catch (err) {
-      if (callback) callback(err);
+      if (cb) cb(err);
     }
   }
 
-  all(sql, params, callback) {
+  all(sql, params, cb) {
     if (typeof params === "function") {
-      callback = params;
+      cb = params;
       params = null;
     }
     try {
       const stmt = this.db.prepare(sql);
-      const rows = executePrepared(stmt, "all", params);
-      if (callback) callback(null, rows);
+      const rows = runStmt(stmt, "all", params);
+      if (cb) cb(null, rows);
     } catch (err) {
-      if (callback) callback(err);
+      if (cb) cb(err);
     }
   }
 
-  get(sql, params, callback) {
+  get(sql, params, cb) {
     if (typeof params === "function") {
-      callback = params;
+      cb = params;
       params = null;
     }
     try {
       const stmt = this.db.prepare(sql);
-      const row = executePrepared(stmt, "get", params);
-      if (callback) callback(null, row);
+      const row = runStmt(stmt, "get", params);
+      if (cb) cb(null, row);
     } catch (err) {
-      if (callback) callback(err);
+      if (cb) cb(err);
     }
   }
 
-  close(callback) {
+  close(cb) {
     try {
       if (this.db.isOpen) this.db.close();
-      if (callback) callback(null);
+      if (cb) cb(null);
     } catch (err) {
-      if (callback) callback(err);
+      if (cb) cb(err);
     }
   }
 }
 
-const nodeSqliteDialectModule = {
+const sqliteModule = {
   OPEN_READONLY: 1,
   OPEN_READWRITE: 2,
   OPEN_CREATE: 4,
   OPEN_FULLMUTEX: 65536,
-  Database: NodeSqliteDatabase,
+  Database: SqliteDriver,
 };
 
 const isCloud = Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET);
-const bundledDbPath = path.resolve("./data/paper_mario.sqlite");
-const storagePath = isCloud ? "/tmp/paper_mario.sqlite" : bundledDbPath;
-
+const localDbFile = path.resolve("./data/paper_mario.sqlite");
+const dbFile = isCloud ? "/tmp/paper_mario.sqlite" : localDbFile;
 const useMysql = Boolean(process.env.DB_HOST && process.env.DB_NAME);
 
 if (!useMysql) {
   if (isCloud) {
-    if (!fs.existsSync(storagePath) && fs.existsSync(bundledDbPath)) {
-      fs.copyFileSync(bundledDbPath, storagePath);
+    if (!fs.existsSync(dbFile) && fs.existsSync(localDbFile)) {
+      fs.copyFileSync(localDbFile, dbFile);
     }
   } else {
-    fs.mkdirSync(path.dirname(storagePath), { recursive: true });
+    fs.mkdirSync(path.dirname(dbFile), { recursive: true });
   }
 }
 
@@ -150,8 +142,8 @@ const sequelize = useMysql
     })
   : new Sequelize({
       dialect: "sqlite",
-      dialectModule: nodeSqliteDialectModule,
-      storage: storagePath,
+      dialectModule: sqliteModule,
+      storage: dbFile,
       logging: false,
       define: { timestamps: false, freezeTableName: true },
     });
@@ -162,8 +154,8 @@ async function getDatabaseSchema() {
     (t) => t !== "sqlite_sequence" && !t.startsWith("v_")
   );
   const schema = {};
-  for (const table of tables) {
-    schema[table] = await qi.describeTable(table);
+  for (const t of tables) {
+    schema[t] = await qi.describeTable(t);
   }
   return schema;
 }
@@ -171,14 +163,12 @@ async function getDatabaseSchema() {
 async function executeReadOnlySql(rawSql) {
   const cleaned = rawSql.trim().replace(/;+$/, "");
   const upper = cleaned.toUpperCase();
-
   if (!upper.startsWith("SELECT") && !upper.startsWith("WITH")) {
-    throw new Error("Blocked: Only SELECT queries are permitted in Q&A mode.");
+    throw new Error("Only SELECT queries are allowed.");
   }
   if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|ATTACH|PRAGMA)\b/.test(upper)) {
-    throw new Error("Blocked: Mutating or administrative keywords are not allowed.");
+    throw new Error("Write or admin SQL keywords are blocked.");
   }
-
   const tx = await sequelize.transaction();
   try {
     const rows = await sequelize.query(cleaned, {
